@@ -1,1 +1,0 @@
-echo "cd \"/home/calibre/calibre_volume/drive_c/Program Files/Amazon/Kindle\""
