@@ -58,6 +58,7 @@ $ ./launch_book_manager.sh
 $ kindle
 ```
 
+
 ## Importing a book from your Kindle library
 There are 2 ways to do this...
 

@@ -26,4 +26,4 @@ docker run -it \
     -v "$HOST_DIR":/home/calibre/calibre_volume \
     -e DISPLAY=unix"$DISPLAY" \
     --name calibre \
-    vace117/calibre
+    vace117/calibre-dedrm
