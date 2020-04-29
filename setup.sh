@@ -77,7 +77,7 @@ if [ ! -f "$SETUP_COMPLETED_MARKER" ]; then
         Or on the Amazon website under 'Devices' (https://www.amazon.ca/mn/dcw/myx.html/ref=kinw_myk_redirect)
     The Serial Number needs to be entered without any spaces!
     You should now be able to Add and Convert books you own on your Kindle to any format.
-    For more usage instructions, please read the guide: TODO_URL
+    For more usage instructions, please read the guide: https://github.com/vace117/calibre-dedrm-docker-image/blob/master/README.md
     Press any key to launch Calibre..." | cowsay 
     press_any_key
 
@@ -96,6 +96,6 @@ ln -s /usr/bin/calibre
 printf "\nTo launch Calibre, type: 'calibre' \n"
 printf "To launch Kindle for PC, type: 'kindle' \n"
 printf "\n\nInstructions for importing, decrypting and converting books are here:\n"
-printf "   TODO_URL\n\n"
+printf "   https://github.com/vace117/calibre-dedrm-docker-image/blob/master/README.md \n\n"
 
 /bin/bash
