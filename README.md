@@ -12,18 +12,19 @@ This project automates all of the setup details, so you don't need to worry abou
 
 # Installation
 * Make sure that you have Docker installed (https://docs.docker.com/engine/install/).
-   
-* Download the driver script: 
-   
-    https://raw.githubusercontent.com/vace117/calibre-dedrm-docker-image/master/bin/launch_book_manager.sh
 
 * Allow Docker to use the display:
 ```text
 $ xhost +"local:docker@"
 ```
+
+* Download the driver script: 
+   
+    https://raw.githubusercontent.com/vace117/calibre-dedrm-docker-image/master/bin/launch_book_manager.sh
    
 * Open a terminal and run it:
 ```text
+$ chmod +x launch_book_manager.sh
 $ ./launch_book_manager.sh
 ```
 
