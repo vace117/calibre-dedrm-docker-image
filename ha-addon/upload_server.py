@@ -266,6 +266,57 @@ PAGE = """\
     transition: background .15s, color .15s;
   }}
   .ql-btn:hover {{ background: #03a9f4; color: #fff; }}
+  body {{
+    background: #121212;
+    color: #e8eaed;
+  }}
+  .card {{
+    background: #1e1e1e;
+    box-shadow: 0 2px 16px rgba(0,0,0,.35);
+  }}
+  h1 {{ color: #f5f5f5; }}
+  .sub {{ color: #a6a6a6; }}
+  .drop-zone {{ border-color: #555; }}
+  .drop-zone:hover, .drop-zone.over {{ background: #102b38; }}
+  .drop-label {{ color: #c5c5c5; }}
+  .file-name, .ql-btn {{ background: #2b2b2b; color: #e0e0e0; }}
+  .toggle-row, .email-section, .dl-section, .quick-links {{ border-color: #383838; }}
+  .toggle-label, .email-row {{ color: #d0d0d0; }}
+  .slider {{ background: #666; }}
+  .email-section-label, .dl-label, .ql-label {{ color: #aaa; }}
+  .ok {{ background: #183521; color: #b7e1c0; }}
+  .err {{ background: #3a1d1d; color: #ffb4ab; }}
+  .ql-btn:hover {{ background: #03a9f4; color: #fff; }}
+  .theme-toggle {{
+    display: block;
+    width: auto;
+    margin: 20px auto 0;
+    padding: 4px 8px;
+    background: transparent;
+    color: #aaa;
+    font-size: 1.25em;
+    line-height: 1;
+  }}
+  .theme-toggle:hover {{ background: #2b2b2b; color: #fff; }}
+  body.light {{
+    background: #f0f2f5;
+    color: #111;
+  }}
+  body.light .card {{ background: #fff; box-shadow: 0 2px 16px rgba(0,0,0,.10); }}
+  body.light h1 {{ color: #111; }}
+  body.light .sub {{ color: #777; }}
+  body.light .drop-zone {{ border-color: #c8cdd5; }}
+  body.light .drop-zone:hover, body.light .drop-zone.over {{ background: #f0faff; }}
+  body.light .drop-label {{ color: #555; }}
+  body.light .file-name, body.light .ql-btn {{ background: #f0f2f5; color: #333; }}
+  body.light .toggle-row, body.light .email-section,
+  body.light .dl-section, body.light .quick-links {{ border-color: #eee; }}
+  body.light .toggle-label, body.light .email-row {{ color: #444; }}
+  body.light .slider {{ background: #ccc; }}
+  body.light .email-section-label, body.light .dl-label, body.light .ql-label {{ color: #999; }}
+  body.light .ok {{ background: #e8f5e9; color: #1b5e20; }}
+  body.light .err {{ background: #fdecea; color: #b71c1c; }}
+  body.light .theme-toggle:hover {{ background: #f0f2f5; color: #333; }}
 </style>
 </head>
 <body>
@@ -290,8 +341,24 @@ PAGE = """\
   {download_section}
   {message}
   {quick_links}
+  <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch to light mode" title="Switch to light mode">☀</button>
 </div>
 <script>
+  var themeToggle = document.getElementById('theme-toggle');
+  var savedTheme = localStorage.getItem('calibre-dedrm-theme');
+  if (savedTheme === 'light') {{
+    document.body.classList.add('light');
+    themeToggle.textContent = '☾';
+    themeToggle.setAttribute('aria-label', 'Switch to dark mode');
+    themeToggle.title = 'Switch to dark mode';
+  }}
+  themeToggle.addEventListener('click', function() {{
+    var light = document.body.classList.toggle('light');
+    localStorage.setItem('calibre-dedrm-theme', light ? 'light' : 'dark');
+    themeToggle.textContent = light ? '☾' : '☀';
+    themeToggle.setAttribute('aria-label', light ? 'Switch to dark mode' : 'Switch to light mode');
+    themeToggle.title = light ? 'Switch to dark mode' : 'Switch to light mode';
+  }});
   var picker = document.getElementById('picker');
   var zone   = document.getElementById('zone');
   var fname  = document.getElementById('fname');
