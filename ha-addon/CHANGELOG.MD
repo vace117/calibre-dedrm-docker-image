@@ -1,5 +1,14 @@
 # Changelog
 
+## V2.3.3
+
+Fix the bookshelf login: KB moved onlinebibliotheek.nl from the iWelcome/OneWelcome
+login (`login.kb.nl`) to Auth0 (`inloggen.kb.nl`), so the old flow ended on the
+new login page and every refresh failed with "bookshelf still not authenticated".
+`kb_login` now fills in the Auth0 login form directly, and reports Auth0's own
+message on failure (e.g. "Onjuiste gebruikersnaam of wachtwoord"), plus captcha
+or MFA prompts.
+
 ## V2.3.2
 
 Auto-download robustness: books that can't be downloaded (read-online only /

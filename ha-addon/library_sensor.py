@@ -2,7 +2,7 @@
 """Read the onlinebibliotheek.nl "Mijn boekenplank" page and publish the loaned
 books as a Home Assistant sensor.
 
-Authentication is automatic: kb_login logs in via KB's iWelcome SSO using the
+Authentication is automatic: kb_login logs in via KB's Auth0 login (inloggen.kb.nl) using the
 configured username + password, then this script parses the rendered bookshelf
 HTML and pushes the result to Home Assistant via the Supervisor API.
 
@@ -170,6 +170,22 @@ def parse_books(html):
     return p.books
 
 
+def bookshelf_notice(html, limit=400):
+    """Visible text of the bookshelf section — used to explain a 0-book result
+    (empty shelf, a KB warning/outage message, or a changed page layout)."""
+    i = html.find("overview bookshelf")
+    if i < 0:
+        i = html.find("widget-bnl-mb-bookshelf")
+    if i < 0:
+        return None
+    i = html.find(">", i) + 1  # start after the opening tag
+    chunk = re.sub(r"<(script|style)\b.*?</\1>", " ", html[i:], flags=re.S)
+    text = re.sub(r"<[^>]+>", " ", chunk)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace("Vragen over verlengen of inleveren van boeken?", "").strip()
+    return text[:limit] or None
+
+
 def looks_authenticated(html):
     """The bookshelf widget only renders for a logged-in session. If the cookie
     expired, onlinebibliotheek.nl serves the (login) homepage instead."""
@@ -283,7 +299,7 @@ def publish_from_cache(error):
 
 
 def get_bookshelf():
-    """Log in via kb_login (KB iWelcome SSO) and return (cookie_jar, html).
+    """Log in via kb_login (KB Auth0 login) and return (cookie_jar, html).
     Raises on failure (kb_login validates that the bookshelf was reached)."""
     user = os.environ.get("KB_USERNAME", "").strip()
     pw = os.environ.get("KB_PASSWORD", "")
@@ -415,6 +431,9 @@ def main():
     books = parse_books(html)
     fetched_at = datetime.now().isoformat(timespec="seconds")
     print(f">>> Found {len(books)} loaned book(s) on the bookshelf.")
+    if not books:
+        print(f">>> 0 books — bookshelf page ({len(html)} bytes) says: "
+              f"{bookshelf_notice(html)!r}", file=sys.stderr)
     for b in books:
         due = b.get("due_raw") or "?"
         print(f"    - {b['title']} — {b.get('author') or '?'} ({b.get('format') or '?'}, due {due})")

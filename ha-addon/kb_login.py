@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""Automated login to onlinebibliotheek.nl via KB's iWelcome/OneWelcome SSO.
+"""Automated login to onlinebibliotheek.nl via KB's Auth0 Universal Login.
 
-The account pages are protected by OneWelcome's "UIC" login at login.kb.nl. This
+Since Nov 2026 the account pages redirect to inloggen.kb.nl (Auth0, "New
+Universal Login") instead of the old iWelcome/OneWelcome login.kb.nl. This
 replicates the browser flow with plain HTTP so the bookshelf can be read from a
 stored username + password (no browser, no manual cookie).
 
-Flow (reverse-engineered from the login SPA, login/api/v2/authenticate):
-  0. GET the bookshelf  -> 302 to login.kb.nl/si/login?...&goto=<authorize-url>
-  1. GET  authenticate  (Goto-Url: <goto>)            -> starts the transaction
-  2. POST authenticate  {module:UsernameAndPassword,  -> validates credentials
-                         definition:{username,password}}
-  3. follow the success redirect through OAuth authorize -> callback sets the
-     authenticated TDP session on onlinebibliotheek.nl
-  4. GET the bookshelf again -> authenticated HTML
+Flow:
+  0. GET the bookshelf -> 302 inloggen.kb.nl/authorize?... -> 302 /u/login?state=X
+     (Auth0 sets its transaction cookies; the page holds a hidden `state` field)
+  1. POST /u/login?state=X  form: state, username, password, action=default
+     -> 302 /authorize/resume -> 302 boekenplank.logged.in.html?code=...
+     -> onlinebibliotheek.nl exchanges the code and sets the TDP session
+  2. GET the bookshelf again -> authenticated HTML
 
-This is BEST EFFORT and verbose on purpose: run it locally with your credentials
-and read the step-by-step log. The exact success/redirect shape can vary, so the
-logging is there to let us adjust steps 2-3 quickly.
+Logging is verbose on purpose so a change in the flow is visible in the add-on log.
 
 Usage:
   KB_USERNAME=... KB_PASSWORD=... python3 kb_login.py
+  (set KB_DUMP_HTML=/path/page.html to save the fetched bookshelf page)
 """
+import html as html_lib
 import http.cookiejar
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -34,20 +35,13 @@ from library_sensor import (
     BOOKSHELF_URL,
     _BROWSER_HEADERS,
     _read_body,
+    bookshelf_notice,
     looks_authenticated,
     parse_books,
 )
 
-LOGIN_ORIGIN = "https://login.kb.nl"
-LOGIN_BASE = LOGIN_ORIGIN + "/si"
-AUTHENTICATE_URL = LOGIN_BASE + "/login/api/v2/authenticate"
-AUTHORIZE_URL = LOGIN_BASE + "/auth/oauth2.0/v1/authorize"
-USERNAME_PASSWORD_MODULE = "UsernameAndPassword"
-
-# OAuth client params observed in the redirect from the bookshelf.
-OAUTH_CLIENT_ID = "tdpweb"
-OAUTH_SCOPE = "profile"
-OAUTH_REDIRECT_URI = "https://www.onlinebibliotheek.nl/account/boekenplank.logged.in.html"
+AUTH0_HOST = "inloggen.kb.nl"
+AUTH0_ORIGIN = "https://" + AUTH0_HOST
 
 
 def log(msg):
@@ -60,115 +54,118 @@ def _new_opener():
     return opener, jar
 
 
+def _strip_query(url):
+    return url.split("?")[0]
+
+
 def _open(opener, url, *, data=None, headers=None, method=None):
+    """Return (final_url, status, body). HTTP errors are returned, not raised,
+    because Auth0 answers a failed login with HTTP 400 + the re-rendered form."""
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={**_BROWSER_HEADERS, **(headers or {})})
+    verb = method or ("POST" if data else "GET")
     try:
         resp = opener.open(req, timeout=30)
         body = _read_body(resp)
-        log(f"{method or ('POST' if data else 'GET')} {url.split('?')[0]} -> "
-            f"HTTP {resp.status}, {len(body)} bytes, final={resp.geturl().split('?')[0]}")
-        return resp, body
+        final, status = resp.geturl(), resp.status
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        log(f"{method or 'GET'} {url.split('?')[0]} -> HTTP {e.code} ERROR, {len(body)} bytes")
-        return e, body
+        body = _read_body(e)
+        final, status = e.geturl() or url, e.code
+    log(f"{verb} {_strip_query(url)} -> HTTP {status}, {len(body)} bytes, "
+        f"final={_strip_query(final)}")
+    return final, status, body
 
 
-def _extract_goto(final_url):
-    qs = urllib.parse.parse_qs(urllib.parse.urlsplit(final_url).query)
-    return (qs.get("goto") or [None])[0]
+def _primary_form_fields(page):
+    """Hidden inputs of Auth0's primary login form (state, persist, ...)."""
+    m = re.search(r'<form\b[^>]*data-form-primary="true"[^>]*>(.*?)</form>', page, re.S)
+    form = m.group(1) if m else page
+    fields = {}
+    for tag in re.findall(r"<input\b[^>]*>", form):
+        if 'type="hidden"' not in tag:
+            continue
+        name = re.search(r'\bname="([^"]+)"', tag)
+        value = re.search(r'\bvalue="([^"]*)"', tag)
+        if name:
+            fields[name.group(1)] = html_lib.unescape(value.group(1)) if value else ""
+    return fields
 
 
-def _build_authorize_url():
-    # Note: a fresh, unguessable state per login.
-    import uuid
-    params = {
-        "client_id": OAUTH_CLIENT_ID,
-        "scope": OAUTH_SCOPE,
-        "response_type": "code",
-        "state": str(uuid.uuid4()),
-        "redirect_uri": OAUTH_REDIRECT_URI,
-    }
-    return AUTHORIZE_URL + "?" + urllib.parse.urlencode(params)
+def _has_captcha(page):
+    """A real captcha widget element (the JS bundle always mentions the attribute)."""
+    return re.search(r"<div\b[^>]*\bdata-captcha-sitekey=", page) is not None
+
+
+def _auth0_error(page):
+    """Extract the user-facing error text Auth0 renders under a field, e.g.
+    <span id="error-element-password" data-error-code="wrong-username-credentials">
+      <span class="ulp-input-error-icon"></span>Onjuiste gebruikersnaam of wachtwoord</span>"""
+    seen = []
+    for tag, inner in re.findall(
+            r'(<span\b[^>]*\bid="error-element-[^"]*"[^>]*>)'
+            r'((?:<span\b[^>]*></span>)?[^<]*)</span>', page):
+        code = (re.search(r'\bdata-error-code="([^"]*)"', tag) or [None, None])[1]
+        text = html_lib.unescape(re.sub(r"<[^>]+>", "", inner)).strip()
+        msg = f"{text} [{code}]" if text and code else (text or code)
+        if msg and msg not in seen:
+            seen.append(msg)
+    # Drop bare codes that are already shown next to a message.
+    seen = [m for m in seen if not any(o != m and o.endswith(f"[{m}]") for o in seen)]
+    return "; ".join(seen) or None
 
 
 def login(username, password):
     """Return (jar, bookshelf_html) on success. Raises RuntimeError otherwise."""
     opener, jar = _new_opener()
 
-    # Step 0 — hit the bookshelf to be redirected to the login app; capture goto.
-    resp, _ = _open(opener, BOOKSHELF_URL)
-    final = resp.geturl()
-    goto = _extract_goto(final)
-    if goto:
-        log(f"captured goto from redirect")
-    else:
-        goto = _build_authorize_url()
-        log("no goto in redirect — initialising authorize URL ourselves")
-        _open(opener, goto)  # establishes the auth transaction context
+    # Step 0 — hit the bookshelf; follow the redirects to the Auth0 login page.
+    login_url, status, page = _open(opener, BOOKSHELF_URL)
+    if looks_authenticated(page):
+        log("bookshelf already authenticated (unexpected for a fresh session).")
+        return jar, page
+    if urllib.parse.urlsplit(login_url).netloc != AUTH0_HOST or "/u/login" not in login_url:
+        raise RuntimeError(
+            f"expected a redirect to {AUTH0_ORIGIN}/u/login but ended at "
+            f"{_strip_query(login_url)} (HTTP {status}) — the login flow changed again.")
+    if _has_captcha(page):
+        raise RuntimeError("Auth0 login page shows a captcha — automated login is blocked.")
 
-    auth_headers = {"Accept": "application/json", "Goto-Url": goto,
-                    "Referer": LOGIN_BASE + "/login", "Origin": LOGIN_ORIGIN}
+    fields = _primary_form_fields(page)
+    if "state" not in fields:
+        raise RuntimeError("no hidden 'state' field on the Auth0 login page.")
+    log(f"Auth0 login page reached; form fields = {sorted(fields)}")
 
-    # Step 1 — start the authentication transaction.
-    resp, body = _open(opener, AUTHENTICATE_URL, headers=auth_headers)
-    start = _as_json(body, "authenticate(start)")
+    # Step 1 — submit username + password (identifier+password on one page).
+    form = {**fields, "username": username, "password": password, "action": "default"}
+    final, status, body = _open(
+        opener, login_url,
+        data=urllib.parse.urlencode(form).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded",
+                 "Origin": AUTH0_ORIGIN, "Referer": login_url},
+        method="POST")
 
-    # Step 2 — submit username + password.
-    payload = json.dumps({
-        "module": USERNAME_PASSWORD_MODULE,
-        "definition": {"username": username, "password": password},
-    }).encode("utf-8")
-    resp, body = _open(opener, AUTHENTICATE_URL, data=payload,
-                       headers={**auth_headers, "Content-Type": "application/json"},
-                       method="POST")
-    result = _as_json(body, "authenticate(credentials)")
-    _check_for_2fa(result)
+    host = urllib.parse.urlsplit(final).netloc
+    if host == AUTH0_HOST:
+        # Still on Auth0: wrong credentials, captcha, MFA, or another prompt.
+        err = _auth0_error(body)
+        path = urllib.parse.urlsplit(final).path
+        if "mfa" in path:
+            raise RuntimeError("Auth0 asks for a second factor (MFA) — not supported.")
+        if _has_captcha(body):
+            raise RuntimeError("Auth0 now requires a captcha — automated login is blocked.")
+        raise RuntimeError(f"login rejected by Auth0 at {path} (HTTP {status})"
+                           + (f": {err}" if err else ""))
 
-    # Step 3 — follow the success redirect to complete OAuth and set the session.
-    redirect = _find_redirect(result) or goto
-    log(f"following post-login redirect")
-    _open(opener, redirect)
-
-    # Step 4 — fetch the bookshelf, now authenticated.
-    resp, html = _open(opener, BOOKSHELF_URL)
+    # Step 2 — the callback should have set the session; fetch the bookshelf.
+    html = body
+    if not looks_authenticated(html):
+        _, _, html = _open(opener, BOOKSHELF_URL)
     if not looks_authenticated(html):
         raise RuntimeError(
-            "login flow finished but bookshelf still not authenticated — "
-            "inspect the step log above (response shape may differ)."
-        )
+            f"Auth0 login succeeded (landed on {_strip_query(final)}) but the "
+            "bookshelf is still not authenticated — inspect the step log above.")
     log("authenticated — bookshelf reached.")
     return jar, html
-
-
-def _as_json(body, label):
-    try:
-        data = json.loads(body)
-        keys = list(data) if isinstance(data, dict) else f"({type(data).__name__})"
-        log(f"{label}: JSON keys = {keys}")
-        return data
-    except ValueError:
-        log(f"{label}: non-JSON response (first 200 chars): {body[:200]!r}")
-        return {}
-
-
-def _check_for_2fa(result):
-    blob = json.dumps(result).lower()
-    if any(k in blob for k in ("twofa", "otp", "totp", "qrcode", "push", "verification")):
-        log("WARNING: response mentions 2FA/OTP — the account may require a second "
-            "factor, which this HTTP-only flow cannot satisfy.")
-
-
-def _find_redirect(result):
-    if not isinstance(result, dict):
-        return None
-    for key in ("redirectUrl", "redirect_uri", "successUrl", "location",
-                "gotoUrl", "goto", "continueUrl", "url"):
-        val = result.get(key)
-        if isinstance(val, str) and val.startswith("http"):
-            return val
-    return None
 
 
 def main():
@@ -177,8 +174,15 @@ def main():
     if not user or not pw:
         raise SystemExit("Set KB_USERNAME and KB_PASSWORD environment variables.")
     jar, html = login(user, pw)
+    dump = os.environ.get("KB_DUMP_HTML")
+    if dump:
+        with open(dump, "w", encoding="utf-8") as f:
+            f.write(html)
+        log(f"bookshelf HTML saved to {dump}")
     books = parse_books(html)
-    log(f"Found {len(books)} loaned book(s):")
+    log(f"Found {len(books)} loaned book(s) ({len(html)} bytes):")
+    if not books:
+        log(f"bookshelf page says: {bookshelf_notice(html)!r}")
     for b in books:
         print(f"    - {b['title']} — {b.get('author') or '?'} "
               f"({b.get('format') or '?'}, due {b.get('due_raw') or '?'})")

@@ -61,13 +61,13 @@ have on loan from [onlinebibliotheek.nl](https://www.onlinebibliotheek.nl).
 
 | Option | Description |
 | --- | --- |
-| `kb_username` | Your onlinebibliotheek.nl (KB) login — the add-on logs in automatically via KB's iWelcome SSO |
+| `kb_username` | Your onlinebibliotheek.nl (KB) login — the add-on logs in automatically via KB's Auth0 login (`inloggen.kb.nl`) |
 | `kb_password` | Your onlinebibliotheek.nl password (masked in UI) |
 | `library_poll_hours` | How often to refresh the sensor, in hours (default `6`) |
 | `auto_download_loans` | Automatically download loaned e-books that aren't in your Calibre library yet (default `false`) |
 
 Set `kb_username` + `kb_password` to enable it. The add-on replicates KB's
-iWelcome login (`login.kb.nl`) over HTTP, completes the OAuth redirect, and reads
+Auth0 login (`inloggen.kb.nl`) over HTTP, completes the OAuth redirect, and reads
 your bookshelf — no browser or manual cookie needed. Accounts that enforce
 two-factor authentication (2FA/OTP) are **not** supported by this flow.
 
